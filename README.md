@@ -7,6 +7,10 @@ predictions against external **unmodified**-miRNA catalogs.
 **Live demo:** [oxomir.samnti.com](https://oxomir.samnti.com)
 ([o8g.samnti.com](https://o8g.samnti.com))
 
+**Repository:** [Marciano-Lab/o8g-mirna-explorer](https://github.com/Marciano-Lab/o8g-mirna-explorer).
+Clone and pull from this repository. It is the project folder in the
+[Marciano-Lab](https://github.com/Marciano-Lab) organization.
+
 > **Biology.** A seed guanine normally pairs **C**; oxidized to 8-oxoG it pairs
 > **A** (Hoogsteen). Each of the *k* guanines in a seed can independently be
 > normal or o8G, giving **2^k** target repertoires per miRNA.
@@ -21,7 +25,7 @@ predictions against external **unmodified**-miRNA catalogs.
 ## Quick start
 
 ```bash
-git clone https://github.com/samntiii/o8g-mirna-explorer.git
+git clone https://github.com/Marciano-Lab/o8g-mirna-explorer.git
 cd o8g-mirna-explorer
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt

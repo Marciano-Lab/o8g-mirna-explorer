@@ -1,7 +1,7 @@
-# Fix-up prompt for `samntiii/o8g-mirna-explorer`
+# Fix-up prompt for `Marciano-Lab/o8g-mirna-explorer`
 
 Paste everything below the line into a coding agent working in a clone of
-`https://github.com/samntiii/o8g-mirna-explorer` (branch `main`). It is ordered
+`https://github.com/Marciano-Lab/o8g-mirna-explorer` (branch `main`). It is ordered
 so the two correctness bugs land first; the feature ports are optional and
 independent of each other.
 
