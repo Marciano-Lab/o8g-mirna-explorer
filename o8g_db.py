@@ -384,16 +384,14 @@ class TargetDB:
         cfg = _op.PrecisionConfig.from_mode(cfg)
         mode_s = _op.mode_value(cfg)
         if mode_s == "TargetScan de novo":
-            import o8g_ts_denovo as ts_dn
-
-            if scanner is None:
-                raise ConservationUnavailable(
-                    "TargetScan de novo needs a live UTR scanner "
-                    "(utr3_human.parquet). Open this mode once to build the index."
-                )
-            return ts_dn.targets_for_state(
-                seed, label, scanner=scanner, min_rank=3, family_id=mirna
-            )
+            # Same TargetScanS 8mer/7mer-m8 calls already stored by precompute.
+            # Reading them avoids rebuilding the ~5 GB in-memory UTR index.
+            df = self.targets(seed, label)
+            if "site_rank" in df.columns and len(df):
+                df = df[df["site_rank"] >= 3]
+            df = df.copy()
+            df["source"] = "targetscan_denovo_precomputed"
+            return df.reset_index(drop=True)
         if conserved_symbols is None:
             conserved_symbols = self._anchor_symbols_for(cfg, seed, mirna)
         df = self.targets_enriched(
@@ -422,16 +420,15 @@ class TargetDB:
         cfg = _op.PrecisionConfig.from_mode(cfg)
         mode_s = _op.mode_value(cfg)
         if mode_s == "TargetScan de novo":
-            import o8g_ts_denovo as ts_dn
-
-            scanner = kwargs.get("scanner")
-            if scanner is None:
-                raise ConservationUnavailable(
-                    "TargetScan de novo partition needs a live UTR scanner."
-                )
-            return ts_dn.partition_denovo(
-                seed, ox_label, scanner=scanner, min_rank=3
-            )
+            su = {str(s).upper() for s in self.target_symbols(seed, "none", min_rank=3)}
+            so = {str(s).upper() for s in self.target_symbols(seed, ox_label, min_rank=3)}
+            return {
+                "unmod": su,
+                "oxid": so,
+                "shared": su & so,
+                "lost": su - so,
+                "gained": so - su,
+            }
         mirna = kwargs.get("mirna")
         conserved_symbols = kwargs.get("conserved_symbols")
         if conserved_symbols is None:

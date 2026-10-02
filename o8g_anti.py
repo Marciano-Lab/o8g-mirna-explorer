@@ -15,6 +15,7 @@ from o8g_energy import (  # noqa: E402  — reload-first for Streamlit hot-reloa
     feasibility_label,
     position2_warning,
     rank_single_g_designs,
+    utr_parquet_path,
 )
 from o8g_sections import SectionContext
 
@@ -128,17 +129,19 @@ def render(ctx: SectionContext) -> None:
         value=10,
         key="anti_collateral_k",
     )
-    scanner = ctx.scanner
-    if scanner is None:
-        st.caption(
-            "UTR scanner unavailable (`utr3_human.parquet`). Cannot predict mRNA off-targets."
-        )
-        return
     try:
         with st.spinner("Scanning 3′UTRs for oligo hybridization sites…"):
             hit_df = collateral_mrna_offtargets(
-                design.sequence, scanner, min_match=int(min_match), top_n=80
+                design.sequence,
+                ctx.scanner,
+                min_match=int(min_match),
+                top_n=80,
             )
+        if hit_df.empty and ctx.scanner is None and utr_parquet_path() is None:
+            st.caption(
+                "UTR table unavailable (`utr3_human.parquet`). Cannot predict mRNA off-targets."
+            )
+            return
         st.dataframe(hit_df, hide_index=True, width="stretch")
         st.caption(
             f"{len(hit_df)} genes with ≥{min_match}-nt contiguous match "

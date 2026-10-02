@@ -97,10 +97,51 @@ def reverse_complement_dna(seq: str) -> str:
     return s.translate(table)[::-1]
 
 
+_COLLATERAL_COLS = ["symbol", "gene_id", "match_nt", "site_in_utr"]
+
+
+def utr_parquet_path():
+    """Longest-UTR table shipped with the app. None when the file is absent."""
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent / "utr3_human.parquet"
+    return path if path.is_file() else None
+
+
+def _normalize_utr(seq: str) -> str:
+    return str(seq).upper().replace("U", "T")
+
+
+def _longest_oligo_match(site: str, utr: str, min_match: int) -> tuple[int, str]:
+    """Longest contiguous piece of ``site`` found in ``utr``, or (0, '')."""
+    if len(site) < min_match or len(utr) < min_match:
+        return 0, ""
+    if not any(site[i : i + min_match] in utr for i in range(len(site) - min_match + 1)):
+        return 0, ""
+    for length in range(len(site), min_match - 1, -1):
+        for start in range(len(site) - length + 1):
+            window = site[start : start + length]
+            if window in utr:
+                return length, window
+    return 0, ""
+
+
+def _collateral_frame(hits: list[dict], top_n: int) -> "pd.DataFrame":
+    import pandas as pd
+
+    if not hits:
+        return pd.DataFrame(columns=_COLLATERAL_COLS)
+    out = pd.DataFrame(hits).sort_values(
+        ["match_nt", "symbol"], ascending=[False, True]
+    )
+    return out.head(top_n).reset_index(drop=True)
+
+
 def collateral_mrna_offtargets(
     oligo_dna: str,
-    scanner,
+    scanner=None,
     *,
+    parquet_path=None,
     min_match: int = 10,
     top_n: int = 80,
 ) -> "pd.DataFrame":
@@ -109,51 +150,64 @@ def collateral_mrna_offtargets(
     The oligo binds RNA stretches complementary to itself. Those sites are the
     reverse-complement of the oligo (≈ mature for a full RC). We report genes
     whose 3′UTR contains a contiguous match of length ≥ ``min_match``.
+
+    A live ``scanner`` is used when one is already built. Otherwise the search
+    streams ``utr3_human.parquet`` one batch at a time and does not build the
+    in-memory k-mer index.
     """
-    import pandas as pd
-
-    if scanner is None or not getattr(scanner, "utrs", None):
-        return pd.DataFrame(columns=["symbol", "gene_id", "match_nt", "site_in_utr"])
-
     oligo = clean_seq(oligo_dna)
     if len(oligo) < min_match:
-        return pd.DataFrame(columns=["symbol", "gene_id", "match_nt", "site_in_utr"])
+        return pd.DataFrame(columns=_COLLATERAL_COLS)
 
-    # Sequence the oligo hybridizes to in an mRNA (DNA alphabet)
     site = reverse_complement_dna(oligo)
-    kmers = {site[i : i + min_match] for i in range(len(site) - min_match + 1)}
+    if scanner is not None and getattr(scanner, "utrs", None):
+        hits: list[dict] = []
+        symbols = scanner.symbols
+        genes = scanner.genes
+        for i, utr in enumerate(scanner.utrs):
+            best, best_site = _longest_oligo_match(site, _normalize_utr(utr), min_match)
+            if best >= min_match:
+                hits.append(
+                    {
+                        "symbol": str(symbols[i]),
+                        "gene_id": str(genes[i]),
+                        "match_nt": int(best),
+                        "site_in_utr": best_site,
+                    }
+                )
+        return _collateral_frame(hits, top_n)
+
+    path = parquet_path or utr_parquet_path()
+    if path is None:
+        return pd.DataFrame(columns=_COLLATERAL_COLS)
+    return _collateral_from_parquet(site, path, min_match=min_match, top_n=top_n)
+
+
+def _collateral_from_parquet(site: str, path, *, min_match: int, top_n: int) -> "pd.DataFrame":
+    import pyarrow.parquet as pq
+
     hits: list[dict] = []
-    symbols = scanner.symbols
-    genes = scanner.genes
-    for i, utr in enumerate(scanner.utrs):
-        if not any(k in utr for k in kmers):
-            continue
-        best = 0
-        best_site = ""
-        for L in range(len(site), min_match - 1, -1):
-            for j in range(len(site) - L + 1):
-                win = site[j : j + L]
-                if win in utr:
-                    best = L
-                    best_site = win
-                    break
-            if best:
-                break
-        if best >= min_match:
-            hits.append(
-                {
-                    "symbol": str(symbols[i]),
-                    "gene_id": str(genes[i]),
-                    "match_nt": int(best),
-                    "site_in_utr": best_site,
-                }
-            )
-    if not hits:
-        return pd.DataFrame(columns=["symbol", "gene_id", "match_nt", "site_in_utr"])
-    out = pd.DataFrame(hits).sort_values(
-        ["match_nt", "symbol"], ascending=[False, True]
-    )
-    return out.head(top_n).reset_index(drop=True)
+    parquet = pq.ParquetFile(path)
+    for batch in parquet.iter_batches(
+        batch_size=512, columns=["gene_id", "symbol", "utr3"]
+    ):
+        gene_ids = batch.column("gene_id").to_pylist()
+        symbols = batch.column("symbol").to_pylist()
+        utrs = batch.column("utr3").to_pylist()
+        for gene_id, symbol, utr in zip(gene_ids, symbols, utrs):
+            if not utr:
+                continue
+            best, best_site = _longest_oligo_match(site, _normalize_utr(utr), min_match)
+            if best >= min_match:
+                hits.append(
+                    {
+                        "symbol": str(symbol),
+                        "gene_id": str(gene_id),
+                        "match_nt": int(best),
+                        "site_in_utr": best_site,
+                    }
+                )
+    return _collateral_frame(hits, top_n)
 
 
 def design_antagomir(

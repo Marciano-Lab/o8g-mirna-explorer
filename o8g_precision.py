@@ -18,7 +18,7 @@ Sequence-based (high stringency) — formerly Stringent; rank == 4 (8mer only).
 TargetScan — rank >= 3 AND TargetScan *predicted* strong sites on the *unmodified*
              baseline (Predicted_Targets_Info). Catalog WT anchor for lost/gained;
              oxidized-state *display* lists remain rank≥3 (same site types as de novo).
-TargetScan de novo — live TargetScanS on WT **and** oxidized seeds (o8G→T WC).
+TargetScan de novo — precomputed TargetScanS 8mer/7mer-m8 lists on WT and oxidized seeds (o8G→T WC). Same scan as the explorer database; no live UTR index.
 Consensus — rank >= 3 AND TargetScan-conserved on the unmodified baseline.
 
 Deprecated aliases

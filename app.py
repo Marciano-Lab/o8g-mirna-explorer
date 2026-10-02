@@ -57,7 +57,7 @@ RANK_LABEL = {1: "6mer", 2: "7mer-A1", 3: "7mer-m8", 4: "8mer"}
 
 # Bump when TargetDB / GeneResolver constructor API changes so Streamlit
 # drops stale @cache_resource instances across hot-reloads.
-_CACHE_VER = 25
+_CACHE_VER = 26
 
 
 @st.cache_resource
@@ -66,7 +66,10 @@ def get_db(_ver: int = _CACHE_VER):
 
 @st.cache_resource
 def get_scanner(_ver: int = _CACHE_VER):
-    """Lazy scanner for on-the-fly 6mer-level scans (only built if needed)."""
+    """Full in-memory UTR k-mer index (~5 GB). The hosted UI must not call this.
+
+    De novo reads o8g_targets.db. Antagomir collateral streams utr3_human.parquet.
+    """
     from o8g_scanner import TargetScanner
     utr = os.path.join(os.path.dirname(os.path.abspath(__file__)), "utr3_human.parquet")
     if not os.path.exists(utr):
@@ -341,8 +344,8 @@ mode_name = st.sidebar.radio(
         "Sequence-based (low stringency): 7mer-m8+8mer (explorer DB). "
         "Sequence-based (high stringency): 8mer only. "
         "TargetScan: explorer ∩ catalog WT predictions (WT baseline anchor). "
-        "TargetScan de novo: live TargetScanS on WT and oxidized seeds "
-        "(o8G→T WC encoding; not the web catalog). "
+        "TargetScan de novo: precomputed TargetScanS 8mer/7mer-m8 lists on WT and "
+        "oxidized seeds (o8G→T WC encoding; not the web catalog). "
         "Consensus: explorer ∩ TargetScan conserved WT families."
     ),
 )
@@ -351,7 +354,7 @@ effective_mode = str(mode_name)
 st.sidebar.caption(
     "Paper / claims: **Sequence-based (high stringency)** or **Consensus**. "
     "**TargetScan** = catalog WT anchor for lost/gained (ox display lists stay rank≥3). "
-    "**TargetScan de novo** = live TargetScanS on oxidized seeds. "
+    "**TargetScan de novo** = precomputed TargetScanS strong sites on oxidized seeds. "
     "Catalog TargetScan and de novo can show the **same oxidized gene count** — "
     "that is expected when both use the same rank≥3 site types on the ox arm. "
     "Gained/lost are always computed after filtering both states."
@@ -406,33 +409,16 @@ elif mode_name == "TargetScan":
 
 universe = _utr_universe()
 
-# TargetScan de novo needs the live UTR index (built once, cached).
-_denovo_scanner = None
 if mode_name == "TargetScan de novo":
-    with st.spinner("Building TargetScan de novo UTR index (one-time)…"):
-        try:
-            _denovo_scanner = get_scanner()
-            st.sidebar.caption(
-                "De novo backend: TargetScanS site types on human 3′UTRs "
-                "(o8G encoded as T for WC search). Optional Perl: "
-                "`O8G_TS_DENOVO_BACKEND=perl`."
-            )
-        except Exception as _e:
-            precision_cfg = PrecisionConfig.from_mode(PrecisionMode.SENSITIVE)
-            effective_mode = (
-                f"{PrecisionMode.SENSITIVE.value} (de novo scanner unavailable)"
-            )
-            st.sidebar.error(
-                "TargetScan de novo unavailable — showing sequence-based (low stringency). "
-                + str(_e)
-            )
+    st.sidebar.caption(
+        "De novo uses the precomputed TargetScanS 8mer/7mer-m8 scan "
+        "(o8G encoded as T). Same lists as the explorer database."
+    )
 
 
 def filtered_targets(label, **kw):
     """Single entry point so no call site bypasses the precision ladder."""
     global precision_cfg, effective_mode
-    if kw.get("scanner") is None and _denovo_scanner is not None:
-        kw = {**kw, "scanner": _denovo_scanner}
     try:
         return db.targets_filtered(seed, label, precision_cfg, mirna=mirna, **kw)
     except ConservationUnavailable as e:
@@ -547,16 +533,17 @@ if _SECTION == "Single state — targets":
     score_targets_thermo = st.checkbox(
         "Add ViennaRNA / TargetScan energetics (slow)",
         value=False,
-        help="Runs RNAduplex / RNAup-style opening + TargetScan context++ for this target list. "
+        help="Joins TargetScan context++ for unmodified miRNAs. "
+             "RNAduplex / RNAup need the in-memory UTR index and stay blank here. "
              "Off by default — Streamlit re-runs the script on every click.",
         key="targets_tab_thermo",
     )
     if score_targets_thermo:
-        with st.spinner("Loading UTR index + scoring RNAduplex / RNAup / TargetScan…"):
-            scanner = get_scanner()
+        with st.spinner("Joining TargetScan context++…"):
             tdf = enrich_binding(
-                tdf, label=cur.label, sort=True, with_thermo=True, scanner=scanner
+                tdf, label=cur.label, sort=True, with_thermo=True, scanner=None
             )
+        scanner = None
     else:
         tdf = enrich_binding(
             tdf, label=cur.label, sort=True, with_thermo=False, scanner=None
@@ -569,7 +556,11 @@ if _SECTION == "Single state — targets":
     if score_targets_thermo:
         st.caption(METRIC_CAPTION)
         if scanner is None:
-            st.caption("UTR parquet missing — ViennaRNA duplex/RNAup columns unavailable.")
+            st.caption(
+                "RNAduplex / RNAup need per-site coordinates from the in-memory UTR index, "
+                "so those columns stay blank. context++ still fills for unmodified miRNAs "
+                "from the TargetScan table."
+            )
         elif not vienna_available():
             st.caption("ViennaRNA Python package not installed — duplex/RNAup columns unavailable.")
     show_cols = [c for c in [
@@ -794,7 +785,7 @@ elif _SECTION == "All states":
             matched_background=universe,
             external_refs=refsets,
             precision_cfg=precision_cfg,
-            scanner=_denovo_scanner,
+            scanner=None,
         )
         from o8g_lof import render_state_summary as _render_lof_summary
 
@@ -885,7 +876,7 @@ elif _SECTION in _SECTION_DISPATCH:
         matched_background=universe,
         external_refs=refsets,
         precision_cfg=precision_cfg,
-        scanner=_denovo_scanner or get_scanner(),
+        scanner=None,
     )
     getattr(sections, _SECTION_DISPATCH[_SECTION])(ctx)
 
@@ -1177,8 +1168,8 @@ elif _SECTION == "External DB comparison":
         "which oxomiR targets are novel vs already known wild-type targets. "
         "**Explorer** always follows the sidebar prediction mode "
         f"(currently `{effective_mode}`). "
-        "Optional **TargetScan de novo** is a live TargetScanS rescan of that same "
-        "oxidation state (independent of the sidebar mode). "
+        "Optional **TargetScan de novo** is the precomputed TargetScanS strong-site "
+        "list for that same oxidation state (independent of the sidebar mode). "
         "Predicted catalogs: TargetScan 8 / miRDB≥80 / DIANA-microT≥0.7 / miRmap. "
         "Experimental: ENCORI CLIP; miRTarBase if a local file is present. "
         "Note: **catalog TargetScan** only lists unmodified miRNAs; on an oxidized "
@@ -1211,9 +1202,9 @@ elif _SECTION == "External DB comparison":
         "Also include TargetScan de novo for this oxidation state",
         value=False,
         key="ext_db_ts_denovo",
-        help="Live TargetScanS site finding on the selected ox state (o8G→T WC encoding). "
-             "Lets you contrast catalog TargetScan (WT only) vs algorithm de novo (ox-aware) "
-             "even when the sidebar prediction mode is sequence-based.",
+        help="Precomputed TargetScanS 8mer/7mer-m8 list for the selected state "
+             "(o8G→T WC encoding). Contrasts catalog TargetScan (WT only) with the "
+             "ox-aware strong-site list, even when the sidebar mode is sequence-based.",
     )
     avail = refsets.available_tools()
     default_tools = [t for t, ok in avail.items() if ok and t != "miRTarBase"]
@@ -1272,12 +1263,9 @@ elif _SECTION == "External DB comparison":
                 sets["Explorer (none)"] = set(ours_unmod["symbol"])
             if include_ts_denovo:
                 try:
-                    import o8g_ts_denovo as _ts_dn
-
-                    _sc = _denovo_scanner if _denovo_scanner is not None else get_scanner()
-                    _dn = _ts_dn.targets_for_state(
-                        seed, db_state, scanner=_sc, min_rank=max(min_rank, 3), family_id=mirna
-                    )
+                    _dn = db.targets(seed, db_state)
+                    if "site_rank" in _dn.columns and len(_dn):
+                        _dn = _dn[_dn["site_rank"] >= max(min_rank, 3)]
                     sets[f"TargetScan de novo ({db_state})"] = (
                         set(_dn["symbol"].astype(str)) if len(_dn) else set()
                     )
@@ -1496,7 +1484,7 @@ st.caption("Prediction: seed positions 2–8; unoxidized G pairs C, 8-oxoG (o8G)
            "not absolute significance, and validate candidates experimentally. "
            "Gene ID resolution uses a locally cached NCBI/HGNC map (no runtime API). "
            "External DB comparison uses local TargetScan/miRDB/DIANA/miRmap files when present "
-           "plus the ENCORI open API; optional **TargetScan de novo** adds a live ox-aware "
-           "TargetScanS set. Explorer follows the sidebar prediction mode. An optional lost-gene "
+           "plus the ENCORI open API; optional **TargetScan de novo** adds the precomputed "
+           "ox-aware TargetScanS strong-site set. Explorer follows the sidebar prediction mode. An optional lost-gene "
            "list ranks Explorer losses by external WT support. Target tables are ranked by "
            "site type (8mer > 7mer-m8 > …).")
