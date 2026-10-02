@@ -118,7 +118,8 @@ def _library_universe(sets) -> set[str]:
 
 
 def enrich(query_genes, library: str = "GO_BP", background: int | Iterable | None = None,
-           min_overlap: int = 2, top: int | None = None) -> pd.DataFrame:
+           min_overlap: int = 2, top: int | None = None, *,
+           include_genes: bool = True) -> pd.DataFrame:
     """Hypergeometric over-representation of `query_genes` in one library."""
     terms, sets = load_library(library)
     lib_u = _library_universe(sets)
@@ -151,7 +152,7 @@ def enrich(query_genes, library: str = "GO_BP", background: int | Iterable | Non
         pval = hypergeom.sf(k - 1, N, M, q)
         expected = q * M / N if N else np.nan
         odds = (k / expected) if expected else np.nan
-        genes = ";".join(sorted(Q & P))
+        genes = ";".join(sorted(Q & P)) if include_genes else ""
         rows.append((term, k, q, M, expected, odds, pval, N, genes))
     df = pd.DataFrame(
         rows,

@@ -787,6 +787,14 @@ elif _SECTION == "All states":
             f"Pathway enrichment (−log10 q) across all **{len(states)}** seed-oxidation "
             f"states, library **{lib}** · background = 3′UTR universe (N={len(universe):,})."
         )
+        st.caption(
+            "The table above is set differences of the stored target lists. "
+            "The pathway heatmap runs one enrichment per oxidation state and stays "
+            "off until you ask for it."
+        )
+        enrich_token = f"{mirna}|{lib}|{effective_mode}|{min_rank}"
+        if st.button("Build pathway heatmap", key="allstates_build_heatmap"):
+            st.session_state["allstates_enrich"] = enrich_token
         try:
             with st.expander("OBOE ranking of oxidation states", expanded=False):
                 _ok, _msg = _o8g_oboe.model_status()
@@ -809,41 +817,47 @@ elif _SECTION == "All states":
                         st.json(rem)
         except Exception as e:
             st.caption(f"OBOE prior skipped: {e}")
-        view = st.radio("Display", ["Heatmap", "Dot plot"], horizontal=True,
-            help="Heatmap = enrichment intensity per state. Dot plot adds gene-overlap as dot "
-                 "size, so you also see how many genes support each term in each state.")
-        top_terms = st.slider("Pathways to show", 8, 40, 22)
-        def _enrich_utr(genes, library=lib, **kw):
-            return enrich(genes, library=library, background=universe, **kw)
-        sg = {}
-        for s in states:
-            df = filtered_targets(s.label, scanner=None, mature_dna=info["seq_dna"])
-            if "site_rank" in df.columns:
-                df = df[df["site_rank"] >= max(min_rank, 3)]
-            sg[s.label] = df["symbol"].tolist()
-        states_order = [s.label for s in states]
-        if view == "Heatmap":
-            with st.spinner("Enriching all states…"):
-                mat = plots.enrichment_matrix(sg, _enrich_utr, library=lib, top_terms=top_terms)
-            if mat.shape[0] >= 2:
-                fig = plots.heatmap_plotly(mat)
-                st.plotly_chart(fig, width='stretch')
-                st.download_button("⬇ Download enrichment matrix (CSV)", mat.to_csv(),
-                                   file_name=f"{mirna}_state_enrichment_{lib}.csv", mime="text/csv")
-            else:
-                st.warning("Not enough enriched pathways to build a heatmap at this setting.")
+        if st.session_state.get("allstates_enrich") != enrich_token:
+            st.info("Pathway heatmap is not built yet.")
         else:
-            with st.spinner("Enriching all states…"):
-                long = plots.state_dotplot_data(sg, _enrich_utr, library=lib, top_terms=top_terms)
-            if long["term"].nunique() >= 2:
-                fig = plots.dotplot_plotly(long, states_order=states_order)
-                st.plotly_chart(fig, width='stretch')
-                st.caption("Dot size = number of overlapping genes; color = −log10 q. "
-                           "Compare a row across columns to see how oxidation shifts each pathway.")
-                st.download_button("⬇ Download enrichment table (CSV)", long.to_csv(index=False),
-                                   file_name=f"{mirna}_state_dotplot_{lib}.csv", mime="text/csv")
+            view = st.radio("Display", ["Heatmap", "Dot plot"], horizontal=True,
+                help="Heatmap = enrichment intensity per state. Dot plot adds gene-overlap as dot "
+                     "size, so you also see how many genes support each term in each state.")
+            top_terms = st.slider("Pathways to show", 8, 40, 22)
+            def _enrich_utr(genes, library=lib, **kw):
+                kw.pop("include_genes", None)
+                return enrich(
+                    genes, library=library, background=universe, include_genes=False, **kw
+                )
+            sg = {}
+            for s in states:
+                df = filtered_targets(s.label, scanner=None, mature_dna=info["seq_dna"])
+                if "site_rank" in df.columns:
+                    df = df[df["site_rank"] >= max(min_rank, 3)]
+                sg[s.label] = df["symbol"].tolist()
+            states_order = [s.label for s in states]
+            if view == "Heatmap":
+                with st.spinner("Enriching all states…"):
+                    mat = plots.enrichment_matrix(sg, _enrich_utr, library=lib, top_terms=top_terms)
+                if mat.shape[0] >= 2:
+                    fig = plots.heatmap_plotly(mat)
+                    st.plotly_chart(fig, width='stretch')
+                    st.download_button("⬇ Download enrichment matrix (CSV)", mat.to_csv(),
+                                       file_name=f"{mirna}_state_enrichment_{lib}.csv", mime="text/csv")
+                else:
+                    st.warning("Not enough enriched pathways to build a heatmap at this setting.")
             else:
-                st.warning("Not enough enriched pathways to build a dot plot at this setting.")
+                with st.spinner("Enriching all states…"):
+                    long = plots.state_dotplot_data(sg, _enrich_utr, library=lib, top_terms=top_terms)
+                if long["term"].nunique() >= 2:
+                    fig = plots.dotplot_plotly(long, states_order=states_order)
+                    st.plotly_chart(fig, width='stretch')
+                    st.caption("Dot size = number of overlapping genes; color = −log10 q. "
+                               "Compare a row across columns to see how oxidation shifts each pathway.")
+                    st.download_button("⬇ Download enrichment table (CSV)", long.to_csv(index=False),
+                                       file_name=f"{mirna}_state_dotplot_{lib}.csv", mime="text/csv")
+                else:
+                    st.warning("Not enough enriched pathways to build a dot plot at this setting.")
 
 elif _SECTION in _SECTION_DISPATCH:
     def _strong_set(label: str) -> set[str]:

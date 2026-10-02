@@ -61,10 +61,12 @@ def _load_mirdb(mirna: str, score_min: float) -> set[str] | None:
     return None
 
 
-def state_summary_table(ctx: SectionContext, *, mirdb_score: float = 80.0) -> pd.DataFrame:
+def state_summary_table(
+    ctx: SectionContext, *, mirdb_score: float = 80.0, include_mirdb: bool = True
+) -> pd.DataFrame:
     """Per-ox-state lost / gained / shared vs unmodified, plus optional miRDB attrition."""
     unmod = {g.upper() for g in ctx.strong_set("none")}
-    baseline = _load_mirdb(ctx.mirna, float(mirdb_score))
+    baseline = _load_mirdb(ctx.mirna, float(mirdb_score)) if include_mirdb else None
     ox_labels = [s for s in ctx.state_labels if s != "none"]
     rows = []
     for lab in ox_labels:
@@ -97,15 +99,26 @@ def render_state_summary(ctx: SectionContext) -> None:
         "current precision mode. Optional **miRDB_lost** is attrition from a WT miRDB "
         "baseline (miRDB has no oxomiR catalog — that column is loss-only)."
     )
-    score = st.slider(
-        "miRDB score cutoff (for mirdb_lost column)",
-        min_value=50,
-        max_value=100,
-        value=80,
-        step=5,
-        key="allstates_mirdb_score",
+    want_mirdb = st.checkbox(
+        "Add miRDB attrition column",
+        value=False,
+        key="allstates_mirdb",
+        help="Reads the hosted miRDB catalog. Off by default so opening this tab "
+             "does not load that database.",
     )
-    tab = state_summary_table(ctx, mirdb_score=float(score))
+    score = 80.0
+    if want_mirdb:
+        score = st.slider(
+            "miRDB score cutoff (for mirdb_lost column)",
+            min_value=50,
+            max_value=100,
+            value=80,
+            step=5,
+            key="allstates_mirdb_score",
+        )
+    tab = state_summary_table(
+        ctx, mirdb_score=float(score), include_mirdb=bool(want_mirdb)
+    )
     if tab.empty:
         st.info("No oxidized states for this seed.")
         return
