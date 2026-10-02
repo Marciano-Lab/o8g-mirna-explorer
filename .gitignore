@@ -17,6 +17,9 @@ o8g_targets.db
 o8g_targets.db-*
 o8g_reverse.db
 o8g_reverse.db-*
+# Assembled at image build from o8g_reverse.compact.db.part* (GitHub 100 MB limit).
+o8g_reverse.compact.db
+o8g_reverse.compact.db.partial
 o8g_targetscan.db
 o8g_targetscan.db-*
 o8g_confident.db
@@ -26,14 +29,15 @@ mirdb_custom_cache.db
 o8g_states.parquet
 utr3_human.parquet
 hsa_mature.parquet
-gene_aliases.parquet
-gene_aliases.meta.txt
-gene_id_map.parquet
 mature.fa
 data_raw/
 
-# paper analysis (benchmarks, figures, gold, manuscript) — keep local only
-paper/
+# paper analysis (benchmarks, figures, gold, manuscript) — keep local only.
+# The hosted reference extract is the exception: it is what oxomir.marcianolab.com loads.
+paper/*
+!paper/data/
+paper/data/*
+!paper/data/hosted_refsets.sqlite.gz
 
 # local examples / backups not part of the shared app
 examples/

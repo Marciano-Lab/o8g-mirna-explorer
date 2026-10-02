@@ -7,3 +7,10 @@ __pycache__/
 data_raw/
 pids/
 .git/
+# local-only bulk data; the hosted image uses the compact extracts instead
+o8g_reverse.db
+o8g_reverse.db-*
+paper/data/mirmap_202203_homsap_targets_1to1.csv.zst
+paper/data/interactions_human.microT.mirbase.txt.gz
+paper/data/Conserved_Family_Info.txt
+paper/data/Conserved_Site_Context_Scores.txt

@@ -1,0 +1,5 @@
+built_at=2026-08-06
+n_genes=19159
+n_alias_rows=122791
+n_with_entrez=19150
+sources=NCBI gene_info + gene2ensembl + HGNC

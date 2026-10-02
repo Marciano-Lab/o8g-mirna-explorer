@@ -17,16 +17,19 @@ Experimentally supported:
                          else ENCORI is the live experimental fallback
                          (CUHK bulk download often 404)
 
-Paths default to paper/data/ (local lab files; gitignored). Per-miRNA results
-are cached under paper/data/cache/refsets/.
+Paths default to paper/data/ (local lab files; gitignored). The hosted app ships
+paper/data/hosted_refsets.sqlite instead of the multi-gigabyte downloads.
+Per-miRNA results are cached under paper/data/cache/refsets/.
 """
 from __future__ import annotations
 
 import gzip
 import io
 import json
+import sqlite3
 import urllib.parse
 import urllib.request
+from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
@@ -34,6 +37,23 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "paper" / "data"
 CACHE = DATA / "cache" / "refsets"
+HOSTED = DATA / "hosted_refsets.sqlite"
+HOSTED_GZ = DATA / "hosted_refsets.sqlite.gz"
+
+
+def _ensure_hosted_sqlite() -> None:
+    """Expand the gzipped extract when a checkout has only the shipped archive."""
+    if HOSTED.exists() or not HOSTED_GZ.exists():
+        return
+    HOSTED.parent.mkdir(parents=True, exist_ok=True)
+    tmp = HOSTED.with_suffix(".sqlite.partial")
+    with gzip.open(HOSTED_GZ, "rb") as src, open(tmp, "wb") as out:
+        while True:
+            chunk = src.read(8 * 1024 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+    tmp.replace(HOSTED)
 
 MIRDB_SCORE_MIN = 80.0
 DIANA_SCORE_MIN = 0.7
@@ -99,6 +119,9 @@ def _family_column_matches(fam_col: str, wanted: str | None, mirna: str) -> bool
         # substring only when wanted is a clean token (avoid "7" matching everything)
         if wanted in fam_col:
             return True
+        # Known family: do not also accept a looser stem hit. "miR-124-3p" is a
+        # substring of both miR-124-3p.1 and miR-124-3p.2, and only .1 is this miRNA.
+        return False
     stem = mirna.replace("hsa-", "")
     return bool(stem and stem in fam_col)
 
@@ -183,23 +206,64 @@ def ensembl_to_symbol() -> dict[str, str]:
     return dict(zip(df["gene_id"].astype(str), df["symbol"].astype(str)))
 
 
+@lru_cache(maxsize=1)
+def _hosted_tools() -> frozenset[str]:
+    """Tools present in the shippable extract. Empty if that file is absent."""
+    _ensure_hosted_sqlite()
+    if not HOSTED.exists():
+        return frozenset()
+    con = sqlite3.connect(str(HOSTED))
+    try:
+        rows = con.execute("SELECT tool FROM tools").fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    finally:
+        con.close()
+    return frozenset(r[0] for r in rows)
+
+
+def _hosted_symbols(tool: str, mirna: str) -> set[str] | None:
+    """Gene symbols from the hosted extract, or None if that tool was not shipped."""
+    if tool not in _hosted_tools():
+        return None
+    con = sqlite3.connect(str(HOSTED))
+    try:
+        rows = con.execute(
+            "SELECT symbol FROM targets WHERE tool=? AND mirna=?",
+            [tool, mirna],
+        ).fetchall()
+    finally:
+        con.close()
+    return {r[0] for r in rows}
+
+
 def available_tools() -> dict[str, bool]:
     """Which external tools have data/API available right now."""
+    hosted = _hosted_tools()
     return {
-        "TargetScan": (DATA / "Predicted_Targets_Info.default_predictions.txt").exists(),
-        "miRDB": (DATA / "miRDB_v6.0_prediction_result.txt.gz").exists()
-        and (DATA / "refseq_to_symbol.tsv").exists(),
-        "DIANA-microT": (DATA / "interactions_human.microT.mirbase.txt.gz").exists()
+        "TargetScan": "TargetScan" in hosted
+        or (DATA / "Predicted_Targets_Info.default_predictions.txt").exists(),
+        "miRDB": "miRDB" in hosted
+        or (
+            (DATA / "miRDB_v6.0_prediction_result.txt.gz").exists()
+            and (DATA / "refseq_to_symbol.tsv").exists()
+        ),
+        "DIANA-microT": "DIANA-microT" in hosted
+        or (DATA / "interactions_human.microT.mirbase.txt.gz").exists()
         or (DATA / "diana_microt_4mirs.tsv").exists(),
-        "miRmap": (DATA / "mirmap_4mirs.parquet").exists()
+        "miRmap": "miRmap" in hosted
+        or (DATA / "mirmap_4mirs.parquet").exists()
         or (DATA / "mirmap_202203_homsap_targets_1to1.csv.zst").exists(),
         "ENCORI": True,  # live API
-        "miRTarBase": any(
-            p.stat().st_size > 1000
-            for p in (DATA / "mirtarbase").glob("hsa_MTI*")
-        )
-        if (DATA / "mirtarbase").exists()
-        else False,
+        "miRTarBase": "miRTarBase" in hosted
+        or (
+            any(
+                p.stat().st_size > 1000
+                for p in (DATA / "mirtarbase").glob("hsa_MTI*")
+            )
+            if (DATA / "mirtarbase").exists()
+            else False
+        ),
     }
 
 
@@ -213,6 +277,12 @@ def load_targetscan(mirna: str) -> set[str]:
             _cache_path("TargetScan", mirna).unlink(missing_ok=True)
         except Exception:
             pass
+
+    hosted = _hosted_symbols("TargetScan", mirna)
+    if hosted is not None:
+        if hosted:
+            _save_cache("TargetScan", mirna, hosted)
+        return hosted
 
     path = DATA / "Predicted_Targets_Info.default_predictions.txt"
     if not path.exists():
@@ -239,6 +309,10 @@ def load_mirdb(mirna: str, score_min: float = MIRDB_SCORE_MIN) -> set[str]:
     cached = _load_cache("miRDB", mirna)
     if cached is not None:
         return cached
+    hosted = _hosted_symbols("miRDB", mirna)
+    if hosted is not None:
+        _save_cache("miRDB", mirna, hosted)
+        return hosted
     map_path = DATA / "refseq_to_symbol.tsv"
     pred = DATA / "miRDB_v6.0_prediction_result.txt.gz"
     if not map_path.exists() or not pred.exists():
@@ -262,6 +336,10 @@ def load_diana(mirna: str, score_min: float = DIANA_SCORE_MIN) -> set[str]:
     cached = _load_cache("DIANA-microT", mirna)
     if cached is not None:
         return cached
+    hosted = _hosted_symbols("DIANA-microT", mirna)
+    if hosted is not None:
+        _save_cache("DIANA-microT", mirna, hosted)
+        return hosted
     cache4 = DATA / "diana_microt_4mirs.tsv"
     raw = DATA / "interactions_human.microT.mirbase.txt.gz"
     e2s = ensembl_to_symbol()
@@ -299,6 +377,10 @@ def load_mirmap(mirna: str, pct_min: float = MIRMAP_PERCENTILE_MIN) -> set[str]:
     cached = _load_cache("miRmap", mirna)
     if cached is not None:
         return cached
+    hosted = _hosted_symbols("miRmap", mirna)
+    if hosted is not None:
+        _save_cache("miRmap", mirna, hosted)
+        return hosted
     path = DATA / "mirmap_4mirs.parquet"
     out: set[str] = set()
     if path.exists():
@@ -364,6 +446,10 @@ def load_mirtarbase(mirna: str) -> set[str]:
     cached = _load_cache("miRTarBase", mirna)
     if cached is not None:
         return cached
+    hosted = _hosted_symbols("miRTarBase", mirna)
+    if hosted is not None:
+        _save_cache("miRTarBase", mirna, hosted)
+        return hosted
     out: set[str] = set()
     mdir = DATA / "mirtarbase"
     files = list(mdir.glob("hsa_MTI*")) if mdir.exists() else []

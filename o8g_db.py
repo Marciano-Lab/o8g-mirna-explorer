@@ -39,8 +39,45 @@ def _apply_precision_filter(*args, **kwargs):
 RANK_SITE = {4: "8mer", 3: "7mer-m8", 2: "7mer-A1", 1: "6mer"}
 
 _ROOT = Path(__file__).resolve().parent
-_DEFAULT_REVERSE = _ROOT / "o8g_reverse.db"
+_FULL_REVERSE = _ROOT / "o8g_reverse.db"
+_COMPACT_REVERSE = _ROOT / "o8g_reverse.compact.db"
 SCHEMA_VERSION_KEY = "schema_version"
+
+
+def _assemble_compact_reverse() -> None:
+    """Join shipped parts when the compact index itself is not in the checkout.
+
+    GitHub rejects the ~128 MB index, so the repo stores ``*.part*`` slices and
+    the image concatenates them. A local checkout that already has the file
+    is left alone.
+    """
+    if _COMPACT_REVERSE.exists():
+        return
+    parts = sorted(_ROOT.glob("o8g_reverse.compact.db.part*"))
+    if not parts:
+        return
+    tmp = _COMPACT_REVERSE.with_suffix(".db.partial")
+    with open(tmp, "wb") as out:
+        for part in parts:
+            with open(part, "rb") as fh:
+                while True:
+                    chunk = fh.read(8 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+    tmp.replace(_COMPACT_REVERSE)
+
+
+def _default_reverse_path() -> Path:
+    """Full row-oriented index when present; otherwise the shippable compact index.
+
+    Hosted deploys only have ``o8g_reverse.compact.db`` (assembled from parts).
+    A local checkout that still has the 3 GB ``o8g_reverse.db`` keeps using it.
+    """
+    if _FULL_REVERSE.exists():
+        return _FULL_REVERSE
+    _assemble_compact_reverse()
+    return _COMPACT_REVERSE
 
 
 class ConservationUnavailable(RuntimeError):
@@ -71,7 +108,11 @@ class TargetDB:
         self.symbols = g.sort_values("gene_idx")["symbol"].to_numpy()
         self.gene_ids = g.sort_values("gene_idx")["gene_id"].to_numpy()
         self._gene_table = g.set_index("gene_idx")
-        self._reverse_candidate = Path(reverse_path) if reverse_path else _DEFAULT_REVERSE
+        self._reverse_candidate = Path(reverse_path) if reverse_path else _default_reverse_path()
+        self._rev_compact: bool | None = None
+        self._rev_seed: np.ndarray | None = None
+        self._rev_label: np.ndarray | None = None
+        self._rev_ox: np.ndarray | None = None
         self._rev: sqlite3.Connection | None = None
         self._state_cols = {
             r[1] for r in self._con.execute("PRAGMA table_info(states)").fetchall()
@@ -427,14 +468,66 @@ class TargetDB:
             "symbol": str(row["symbol"]),
         }
 
-    def states_targeting_gene(self, gene_idx: int) -> pd.DataFrame:
+    def _load_compact_lut(self) -> None:
+        if self._rev_seed is not None:
+            return
+        lut = pd.read_sql(
+            "SELECT state_id, seed, label, oxidized_positions FROM rev_states ORDER BY state_id",
+            self._rev_con(),
+        )
+        ids = lut["state_id"].to_numpy()
+        if len(ids) == 0 or not np.array_equal(ids, np.arange(len(ids))):
+            raise ValueError("compact reverse rev_states.state_id is not 0..n-1")
+        self._rev_seed = lut["seed"].to_numpy()
+        self._rev_label = lut["label"].to_numpy()
+        self._rev_ox = lut["oxidized_positions"].fillna("").to_numpy()
+
+    def _reverse_is_compact(self) -> bool:
+        if self._rev_compact is None:
+            rev = self._rev_con()
+            self._rev_compact = (
+                rev.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gene_rev'"
+                ).fetchone()
+                is not None
+            )
+        return self._rev_compact
+
+    def _reverse_gene_hits(self, gene_idx: int) -> pd.DataFrame:
+        """Strong-site rows for one gene: seed, state_label, site_rank, oxidized_positions."""
+        cols = ["seed", "state_label", "site_rank", "oxidized_positions"]
         rev = self._rev_con()
-        gt = pd.read_sql(
+        if self._reverse_is_compact():
+            row = rev.execute(
+                "SELECT payload FROM gene_rev WHERE gene_idx=?", [int(gene_idx)]
+            ).fetchone()
+            if not row or not row[0]:
+                return pd.DataFrame(columns=cols)
+            raw = zlib.decompress(row[0])
+            b = np.frombuffer(raw, dtype=np.uint8)
+            if len(b) % 3 != 0:
+                raise ValueError("compact reverse payload length is not a multiple of 3")
+            state_ids = b[0::3].astype(np.uint32) | (b[1::3].astype(np.uint32) << 8)
+            ranks = b[2::3].astype(int)
+            self._load_compact_lut()
+            return pd.DataFrame(
+                {
+                    "seed": self._rev_seed[state_ids],
+                    "state_label": self._rev_label[state_ids],
+                    "site_rank": ranks,
+                    "oxidized_positions": self._rev_ox[state_ids],
+                }
+            )
+        return pd.read_sql(
             "SELECT seed, label AS state_label, site_rank, oxidized_positions "
             "FROM gene_targets WHERE gene_idx=?",
             rev,
             params=[int(gene_idx)],
         )
+
+    def states_targeting_gene(self, gene_idx: int) -> pd.DataFrame:
+        rev = self._rev_con()
+        gt = self._reverse_gene_hits(gene_idx)
         empty_cols = [
             "mirna",
             "all_mirnas",
@@ -511,12 +604,7 @@ class TargetDB:
             "vs_unmodified",
         ]
         rev = self._rev_con()
-        gt = pd.read_sql(
-            "SELECT seed, label AS state_label, site_rank, oxidized_positions "
-            "FROM gene_targets WHERE gene_idx=?",
-            rev,
-            params=[int(gene_idx)],
-        )
+        gt = self._reverse_gene_hits(gene_idx)
         if gt.empty:
             return pd.DataFrame(columns=empty_cols)
 
