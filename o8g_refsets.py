@@ -206,13 +206,19 @@ def ensembl_to_symbol() -> dict[str, str]:
     return dict(zip(df["gene_id"].astype(str), df["symbol"].astype(str)))
 
 
+def _hosted_connect() -> sqlite3.Connection:
+    from o8g_db import connect_sqlite
+
+    return connect_sqlite(HOSTED, check_same_thread=True)
+
+
 @lru_cache(maxsize=1)
 def _hosted_tools() -> frozenset[str]:
     """Tools present in the shippable extract. Empty if that file is absent."""
     _ensure_hosted_sqlite()
     if not HOSTED.exists():
         return frozenset()
-    con = sqlite3.connect(str(HOSTED))
+    con = _hosted_connect()
     try:
         rows = con.execute("SELECT tool FROM tools").fetchall()
     except sqlite3.OperationalError:
@@ -222,11 +228,12 @@ def _hosted_tools() -> frozenset[str]:
     return frozenset(r[0] for r in rows)
 
 
+@lru_cache(maxsize=256)
 def _hosted_symbols(tool: str, mirna: str) -> set[str] | None:
     """Gene symbols from the hosted extract, or None if that tool was not shipped."""
     if tool not in _hosted_tools():
         return None
-    con = sqlite3.connect(str(HOSTED))
+    con = _hosted_connect()
     try:
         rows = con.execute(
             "SELECT symbol FROM targets WHERE tool=? AND mirna=?",
@@ -234,7 +241,7 @@ def _hosted_symbols(tool: str, mirna: str) -> set[str] | None:
         ).fetchall()
     finally:
         con.close()
-    return {r[0] for r in rows}
+    return frozenset(r[0] for r in rows)
 
 
 def available_tools() -> dict[str, bool]:

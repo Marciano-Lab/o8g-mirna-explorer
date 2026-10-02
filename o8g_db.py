@@ -24,12 +24,25 @@ import o8g_precision as _o8g_precision
 from o8g_precision import PrecisionConfig, PrecisionMode, partition_after_filter
 
 
-def _live_precision():
-    """Always use the current o8g_precision module (Streamlit hot-reload safe)."""
-    import importlib
-    import o8g_precision as _op
+def connect_sqlite(path, *, check_same_thread: bool = False) -> sqlite3.Connection:
+    """Open SQLite without mmap.
 
-    return importlib.reload(_op)
+    The hosted catalog is ~300 MB. On Linux, SQLite's default mmap counts
+    toward the container memory limit and kills the 512 MB Render instance
+    as soon as External DB comparison opens that file.
+    """
+    con = sqlite3.connect(str(path), check_same_thread=check_same_thread)
+    con.execute("PRAGMA mmap_size=0")
+    con.execute("PRAGMA cache_size=-512")
+    return con
+
+
+def _live_precision():
+    """Use the already-imported precision module.
+
+    Reloading it on every rerun duplicated module state on the small host.
+    """
+    return _o8g_precision
 
 
 def _apply_precision_filter(*args, **kwargs):
@@ -103,7 +116,7 @@ def _primary_mirna(names: list[str]) -> str:
 class TargetDB:
     def __init__(self, path: str = "o8g_targets.db", reverse_path: str | Path | None = None):
         self.path = path
-        self._con = sqlite3.connect(path, check_same_thread=False)
+        self._con = connect_sqlite(path)
         g = pd.read_sql("SELECT gene_idx, gene_id, symbol FROM genes", self._con)
         self.symbols = g.sort_values("gene_idx")["symbol"].to_numpy()
         self.gene_ids = g.sort_values("gene_idx")["gene_id"].to_numpy()
@@ -143,7 +156,7 @@ class TargetDB:
                 "o8g_reverse.db not found. Run: python scripts/build_reverse_index.py"
             )
         if self._rev is None:
-            self._rev = sqlite3.connect(str(self.reverse_path), check_same_thread=False)
+            self._rev = connect_sqlite(self.reverse_path)
         return self._rev
 
     def mirnas(self) -> pd.DataFrame:

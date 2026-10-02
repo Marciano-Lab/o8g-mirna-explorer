@@ -22,9 +22,6 @@ import streamlit as st
 from o8g_engine import extract_seed, enumerate_states, g_positions, SeedState
 import o8g_db as _o8g_db
 import o8g_precision as _o8g_precision
-import importlib as _importlib
-_o8g_precision = _importlib.reload(_o8g_precision)  # pick up new PrecisionMode members
-_o8g_db = _importlib.reload(_o8g_db)  # pick up ConservationUnavailable across hot-reloads
 from o8g_db import TargetDB, ConservationUnavailable
 from o8g_enrich import enrich, enrich_within_pool, compare_states, available_libraries
 from o8g_genes import ID_TYPES, GeneResolver
@@ -39,14 +36,8 @@ from o8g_pubthermo import annotate_gene_mirna_hits, PROVENANCE_CAPTION as PUBTHE
 import o8g_refsets as refsets
 import o8g_plots as plots
 import o8g_sections as sections
-plots = _importlib.reload(plots)   # pick up edits to the plotting module on rerun
-refsets = _importlib.reload(refsets)
-sections = _importlib.reload(sections)
 import o8g_oboe as _o8g_oboe
 import o8g_oboe_model as _o8g_oboe_model
-
-_o8g_oboe_model = _importlib.reload(_o8g_oboe_model)
-_o8g_oboe = _importlib.reload(_o8g_oboe)  # OBOE RNABERT ranking API
 
 st.set_page_config(page_title="o8G-miRNA Retargeting Explorer", layout="wide",
                    initial_sidebar_state="expanded")
