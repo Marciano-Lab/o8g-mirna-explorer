@@ -125,6 +125,9 @@ def rnaup_open_ddg(mir_rna: str, tgt_rna: str) -> tuple[Optional[float], Optiona
 @lru_cache(maxsize=512)
 def _ts_contextpp_map(mirna: str) -> dict[str, float]:
     """miRNA → {gene_symbol: best weighted context++}. Prefer `_ts_contextpp_for_gene`."""
+    from conservation import ensure_context_scores_txt
+
+    ensure_context_scores_txt(TS_CONTEXT.parent)
     if not TS_CONTEXT.exists() or not mirna:
         return {}
     best: dict[str, float] = {}
@@ -153,6 +156,9 @@ def _ts_contextpp_for_gene(gene_symbol: str, mirnas_key: tuple[str, ...]) -> dic
     per miRNA) keeps Gene→miRNA energetics interactive even with hundreds of
     unmodified hits.
     """
+    from conservation import ensure_context_scores_txt
+
+    ensure_context_scores_txt(TS_CONTEXT.parent)
     if not TS_CONTEXT.exists() or not gene_symbol or not mirnas_key:
         return {}
     want = set(mirnas_key)

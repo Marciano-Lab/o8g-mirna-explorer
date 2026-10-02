@@ -27,7 +27,6 @@ o8g_confident.db-*
 mirdb_ref.parquet
 mirdb_custom_cache.db
 o8g_states.parquet
-utr3_human.parquet
 hsa_mature.parquet
 mature.fa
 data_raw/
@@ -38,6 +37,8 @@ paper/*
 !paper/data/
 paper/data/*
 !paper/data/hosted_refsets.sqlite.gz
+!paper/data/ts80_conserved_family_human_strong.pkl
+!paper/data/Conserved_Site_Context_Scores.txt.gz
 
 # local examples / backups not part of the shared app
 examples/

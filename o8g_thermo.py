@@ -148,6 +148,9 @@ def dg_rnaup(mir_rna: str, utr_window_rna: str, seed_off: int) -> float:
 @lru_cache(maxsize=8)
 def _targetscan_contextpp_table(mirna: str) -> pd.DataFrame:
     """Best (most negative) weighted context++ score per gene symbol for one miRNA."""
+    from conservation import ensure_context_scores_txt
+
+    ensure_context_scores_txt(TS_CONTEXT.parent)
     if not TS_CONTEXT.exists():
         return pd.DataFrame(columns=["symbol", "contextpp_TargetScan"])
     best: dict[str, float] = {}

@@ -48,6 +48,31 @@ def _strip_ensembl(eid: str) -> str:
     return str(eid).split(".")[0]
 
 
+def ensure_context_scores_txt(data_dir: Path | str | None = None) -> Path:
+    """Expand the shipped gzip when the image only has the compressed table.
+
+    GitHub's file cap is why ``Conserved_Site_Context_Scores.txt`` (144 MB) is
+    stored as an 18 MB gzip. The readers still open the plain text path.
+    """
+    import gzip
+
+    data_dir = Path(data_dir or DEFAULT_DATA)
+    dest = data_dir / "Conserved_Site_Context_Scores.txt"
+    gz = data_dir / "Conserved_Site_Context_Scores.txt.gz"
+    if dest.exists() or not gz.exists():
+        return dest
+    data_dir.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".txt.partial")
+    with gzip.open(gz, "rb") as src, open(tmp, "wb") as out:
+        while True:
+            chunk = src.read(8 * 1024 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+    tmp.replace(dest)
+    return dest
+
+
 class ConservedIndex:
     """Gene-symbol and Ensembl sets of TargetScan-conserved targets per mature miRNA / family."""
 
@@ -81,7 +106,7 @@ class ConservedIndex:
             self._loaded = True
             return
         fam_path = self.data_dir / "Conserved_Family_Info.txt"
-        ctx_path = self.data_dir / "Conserved_Site_Context_Scores.txt"
+        ctx_path = ensure_context_scores_txt(self.data_dir)
         if not fam_path.exists():
             raise FileNotFoundError(
                 f"Missing {fam_path}. Download TargetScan 8.0 Conserved_Family_Info.txt "
